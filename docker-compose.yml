@@ -1,6 +1,7 @@
 services:
   kokoro:
     image: ghcr.io/remsky/kokoro-fastapi-gpu:latest
+    ipc: "host"
     ports:
       - "8880:8880"
     deploy:
@@ -13,6 +14,7 @@ services:
 
   trainer:
     build: .
+    ipc: "host"
     deploy:
       resources:
         reservations:

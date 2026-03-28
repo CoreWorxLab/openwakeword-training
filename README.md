@@ -56,6 +56,8 @@ docker compose run --rm trainer python train.py --wake-word "hey cal" --data-dir
 
 Training takes 4-8 hours depending on GPU.
 
+Don't be alarmed if the finished model is only a few hundred kilobytes. Test your model in the following section to see if it works correctly.
+
 ### 5. Test Your Model
 
 Test on your host machine (needs microphone access):

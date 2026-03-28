@@ -20,6 +20,7 @@ acoustics==0.2.6
 pronouncing==0.2.0
 datasets==2.14.6
 deep-phonemizer==0.0.19
+protobuf>=3.20.0,<4.0.0
 
 # Data download/processing
 piper-phonemize
