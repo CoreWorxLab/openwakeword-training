@@ -39,7 +39,7 @@ def get_kokoro_voices(kokoro_url: str) -> list:
         r = requests.get(f"{kokoro_url}/v1/audio/voices", timeout=5)
         voices = r.json().get("voices", [])
         # Filter to English voices (a = American, b = British)
-        english = [v for v in voices if v.startswith(('af_', 'am_', 'bf_', 'bm_'))]
+        english = [v['id'] for v in voices if v['id'].startswith(('af_', 'am_', 'bf_', 'bm_'))]
         print(f"Kokoro voices available: {len(english)}")
         return english
     except Exception as e:
