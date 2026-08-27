@@ -28,3 +28,4 @@ services:
       - KOKORO_URL=http://kokoro:8880
     depends_on:
       - kokoro
+    shm_size: "8gb"

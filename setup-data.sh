@@ -67,7 +67,7 @@ if [ ! -d "$DATA_DIR/audioset_16k" ]; then
     echo "Downloading AudioSet background audio..."
     mkdir -p "$DATA_DIR/audioset" "$DATA_DIR/audioset_16k"
     curl -L -o "$DATA_DIR/audioset/bal_train09.tar" \
-        'https://huggingface.co/datasets/agkphysics/AudioSet/resolve/main/bal_train09.tar'
+        'https://huggingface.co/datasets/agkphysics/AudioSet/resolve/196c0900867eff791b8f4d4be57db277e9a5b131/bal_train00.tar'
     tar -xf "$DATA_DIR/audioset/bal_train09.tar" -C "$DATA_DIR/audioset"
 
     python3 << EOF
