@@ -18,6 +18,7 @@ docker compose run --rm trainer python train.py --wake-word "hey cal" --data-dir
 ### Host (mic access needed)
 ```bash
 python record_samples.py --wake-word "hey cal"                  # Record voice samples
+python check_alignment.py my_real_samples/ --verbose            # Inspect sample timing
 python test_model.py --model my_custom_model/hey_cal.onnx       # Test model
 ```
 
@@ -57,4 +58,7 @@ python train.py --wake-word "hey cal"
 - **Negatives must be clearly different** from the wake word. Similar-sounding phrases ("hey call", "hey carl") hurt performance. Use only distinct phrases ("hello", "alexa", "hey siri").
 - All audio is 16kHz, 16-bit, mono WAV.
 - Real voice samples are copied 3x to weight them higher in training.
+- **`my_real_samples/` is searched recursively**, so speakers can live in per-speaker subdirectories (`my_real_samples/jay/`). The relative path is flattened into the destination filename — two speakers recording the same phrase produce identical basenames, so using the basename alone would silently overwrite one speaker's clips with the other's.
+- **Silence is trimmed from all samples before augmentation.** OpenWakeWord's `create_fixed_size_clip` (`openwakeword/data.py:719`) aligns the end of the *array* — not the end of the *speech* — with the end of the detection window, so untrimmed silence displaces the phrase. Untrimmed, tight Kokoro clips and fixed 2s recordings land at different offsets and teach contradictory alignments. Negatives are trimmed too, so clip length can't become a class cue. Disable with `--no-trim`.
+- **`record_samples.py` cues after a 0.6s mic warm-up.** Cueing before the input device settles loses the first fraction of a second and clips the word onset.
 - `--data-dir` flag lets train.py work both inside Docker (`/app/data`) and on host (`.`).

@@ -107,17 +107,22 @@ def generate_kokoro_samples(kokoro_url: str, voices: list, output_dir: Path,
 
 
 def copy_real_samples(wake_word: str, output_dir: Path, copies: int = 3) -> int:
-    """Copy real voice recordings to training directory."""
-    # Look for samples in my_real_samples/ directory
+    """Copy real voice recordings to training directory.
+
+    Recordings may sit loose in my_real_samples/ or be grouped one directory per
+    speaker (my_real_samples/jay/, my_real_samples/alex/, ...). Both layouts are
+    picked up, so speakers can be added, re-recorded, or dropped independently.
+    """
     real_samples_dir = WORK_DIR / "my_real_samples"
     if not real_samples_dir.exists():
-        print("  No real samples found (run record_samples.py first)")
+        print("  No real samples found (record your voice first)")
         return 0
 
     output_dir.mkdir(parents=True, exist_ok=True)
     count = 0
+    per_speaker = {}
 
-    for wav_file in real_samples_dir.glob("*.wav"):
+    for wav_file in sorted(real_samples_dir.rglob("*.wav")):
         try:
             sr, data = scipy.io.wavfile.read(wav_file)
             if sr != 16000:
@@ -126,16 +131,95 @@ def copy_real_samples(wake_word: str, output_dir: Path, copies: int = 3) -> int:
                 data = resample(data, num_samples)
                 data = np.clip(data, -32768, 32767).astype(np.int16)
 
+            # Flatten the path into the destination filename. Two speakers recording
+            # the same phrase produce identical basenames (hey_seeree_0001.wav), so
+            # using wav_file.name alone would silently overwrite one with the other.
+            rel = wav_file.relative_to(real_samples_dir)
+            stem = "_".join(rel.with_suffix("").parts)
+            speaker = rel.parts[0] if len(rel.parts) > 1 else "(loose files)"
+            per_speaker[speaker] = per_speaker.get(speaker, 0) + 1
+
             # Create multiple copies to weight real samples higher
             for i in range(copies):
-                dest = output_dir / f"real_{i}_{wav_file.name}"
+                dest = output_dir / f"real_{i}_{stem}.wav"
                 scipy.io.wavfile.write(str(dest), 16000, data)
                 count += 1
         except Exception as e:
             print(f"  Error processing {wav_file}: {e}")
 
+    if per_speaker:
+        detail = ", ".join(f"{s}: {n}" for s, n in sorted(per_speaker.items()))
+        print(f"  Found {sum(per_speaker.values())} real samples ({detail})")
     print(f"  Copied {count} real voice samples ({copies}x weight)")
     return count
+
+
+def trim_silence(data: np.ndarray, sr: int = 16000, top_db: float = 40.0,
+                 pad_ms: float = 30.0, frame_ms: float = 10.0) -> np.ndarray:
+    """
+    Trim leading and trailing silence using short-time RMS energy.
+
+    OpenWakeWord's create_fixed_size_clip (openwakeword/data.py:719) aligns the END
+    OF THE ARRAY with the end of the fixed-size window, not the end of the speech:
+
+        start = max(0, n_samples - (len(x) + end_jitter))
+
+    Trailing silence therefore pushes the phrase earlier in the window than the
+    alignment the model actually sees when streaming detection fires. Leading
+    silence matters here too: recordings from record_samples.py are a fixed 2s
+    buffer with the phrase somewhere inside it, so untrimmed they fill the window
+    and land at a completely different offset than the tight Kokoro clips.
+    """
+    if data.size == 0:
+        return data
+
+    frame = max(1, int(sr * frame_ms / 1000))
+    n_frames = len(data) // frame
+    if n_frames < 2:
+        return data
+
+    frames = data[:n_frames * frame].astype(np.float64).reshape(n_frames, frame)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    peak = rms.max()
+    if peak <= 0:
+        return data
+
+    voiced = np.flatnonzero(rms > peak * (10 ** (-top_db / 20)))
+    if voiced.size == 0:
+        return data
+
+    pad = int(sr * pad_ms / 1000)
+    start = max(0, voiced[0] * frame - pad)
+    end = min(len(data), (voiced[-1] + 1) * frame + pad)
+
+    # Never hand back a clip too short to contain a wake word - if the energy
+    # detection produced something implausible, keep the original.
+    if end - start < int(sr * 0.2):
+        return data
+
+    return data[start:end]
+
+
+def trim_directory(directory: Path, desc: str):
+    """Trim silence from every WAV in a directory, in place."""
+    wavs = sorted(directory.glob("*.wav"))
+    if not wavs:
+        return 0, 0.0
+
+    removed_ms = []
+    for wav_file in tqdm(wavs, desc=desc):
+        try:
+            sr, data = scipy.io.wavfile.read(wav_file)
+            if data.ndim > 1:
+                data = data[:, 0]
+            trimmed = trim_silence(data, sr)
+            if len(trimmed) < len(data):
+                removed_ms.append((len(data) - len(trimmed)) / sr * 1000)
+                scipy.io.wavfile.write(str(wav_file), sr, trimmed.astype(np.int16))
+        except Exception as e:
+            print(f"  Error trimming {wav_file.name}: {e}")
+
+    return len(removed_ms), float(np.mean(removed_ms)) if removed_ms else 0.0
 
 
 def setup_training_dirs(wake_word: str) -> Path:
@@ -227,6 +311,8 @@ def main():
     parser.add_argument("--kokoro-url", default=os.environ.get("KOKORO_URL", "http://localhost:8880"),
                         help="Kokoro TTS URL")
     parser.add_argument("--data-dir", default=".", help="Directory containing training data (features, audioset, fma, mit_rirs)")
+    parser.add_argument("--no-trim", action="store_true",
+                        help="Skip silence trimming before augmentation (not recommended)")
     args = parser.parse_args()
 
     wake_word = args.wake_word
@@ -309,6 +395,20 @@ def main():
     print(f"  Positive: {n_pos_train} train, {n_pos_test} test")
     print(f"  Negative: {n_neg_train} train, {n_neg_test} test")
     print("=" * 60)
+
+    # === TRIM SILENCE ===
+    # Must run before augmentation: OpenWakeWord places the end of each array at the
+    # end of the detection window, so silence on the clip displaces the speech.
+    # Negatives are trimmed too - treating both classes identically keeps clip length
+    # from becoming a cue the model can learn instead of the phrase itself.
+    if not args.no_trim:
+        print("\n" + "=" * 60)
+        print("Trimming silence (aligns speech with the detection window)...")
+        print("=" * 60)
+        for directory, label in [(pos_train, "positive train"), (pos_test, "positive test"),
+                                 (neg_train, "negative train"), (neg_test, "negative test")]:
+            n_trimmed, mean_ms = trim_directory(directory, f"Trim {label}")
+            print(f"  {label}: trimmed {n_trimmed} clips (mean {mean_ms:.0f}ms removed)")
 
     # Create config and run training
     create_config(wake_word, n_pos_train, args.training_steps, args.layer_size, args.data_dir)

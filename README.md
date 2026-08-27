@@ -43,10 +43,32 @@ pip install pyaudio numpy scipy
 python record_samples.py --wake-word "hey cal"
 ```
 
-- Press ENTER to start each 2-second recording
+- Press ENTER, then wait for "SPEAK NOW!" before speaking
 - Say your wake word naturally
 - Vary your tone, speed, and distance from the mic
 - Press 'q' to quit
+
+The cue fires only after the microphone has opened and settled (0.6s warm-up). Speaking before it means the word onset is never captured.
+
+**Multiple speakers:** put each person in their own subdirectory — `train.py` searches `my_real_samples/` recursively and flattens the path into the training filename, so speakers with identical clip names don't collide:
+
+```
+my_real_samples/
+├── jay/    hey_seeree_0001.wav …
+└── alex/   hey_seeree_0001.wav …
+```
+
+Loose files directly in `my_real_samples/` still work. Keeping speakers separate lets you re-record or drop one without guessing which clips were whose.
+
+### 3b. Check Your Recordings (Optional)
+
+Before committing to a multi-hour training run, verify your samples are usable:
+
+```bash
+python check_alignment.py my_real_samples/ --verbose
+```
+
+This reports how far each clip's speech sits from the end of OpenWakeWord's detection window, and flags clips with no detectable speech. Training trims silence automatically, so large trailing-silence numbers here are expected and fine — what matters is that speech is actually present and not clipped.
 
 ### 4. Train Your Model
 
@@ -77,6 +99,7 @@ Speak your wake word into the microphone and watch for detections.
 | `--layer-size` | 64 | Network size (32, 64, or 128) |
 | `--kokoro-url` | http://localhost:8880 | Kokoro TTS endpoint |
 | `--data-dir` | `.` | Training data directory (`/app/data` for Docker) |
+| `--no-trim` | off | Skip silence trimming before augmentation (not recommended) |
 
 ## How It Works
 
@@ -84,13 +107,19 @@ Speak your wake word into the microphone and watch for detections.
 
 2. **Negative Samples** - Generates samples of clearly different phrases ("hello", "hey siri", "alexa") to teach the model what NOT to detect
 
-3. **Augmentation** - OpenWakeWord adds noise, reverb, and mixing to simulate real-world conditions
+3. **Silence Trimming** - Strips leading/trailing silence from all samples so speech lands where the model expects it (see below)
 
-4. **Training** - Neural network learns to distinguish your wake word from everything else
+4. **Augmentation** - OpenWakeWord adds noise, reverb, and mixing to simulate real-world conditions
+
+5. **Training** - Neural network learns to distinguish your wake word from everything else
 
 ### Key Insight
 
 **Don't use similar-sounding negatives.** Training on phrases like "hey call" or "hey carl" actually hurts performance. Use only clearly different phrases like "hello", "hey siri", "alexa".
+
+### Why Silence Trimming Matters
+
+OpenWakeWord's `create_fixed_size_clip` aligns the **end of the array** with the end of the detection window, not the end of the speech. Untrimmed, a tight ~1.3s Kokoro clip and a fixed 2s recording place their speech at completely different offsets — so the two halves of the positive set teach contradictory alignments, and the real recordings are weighted 3x. Trimming first collapses that difference. Both positives and negatives are trimmed, so clip length never becomes a cue the model can learn instead of the phrase.
 
 ## Output
 
