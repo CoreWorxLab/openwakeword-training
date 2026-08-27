@@ -39,6 +39,7 @@ def get_kokoro_voices(kokoro_url: str) -> list:
         r = requests.get(f"{kokoro_url}/v1/audio/voices", timeout=5)
         voices = r.json().get("voices", [])
         # Filter to English voices (a = American, b = British)
+        voices = [v["id"] if isinstance(v, dict) else v for v in voices]
         english = [v for v in voices if v.startswith(('af_', 'am_', 'bf_', 'bm_'))]
         print(f"Kokoro voices available: {len(english)}")
         return english
@@ -354,7 +355,7 @@ def main():
     # Using similar-sounding phrases hurts model performance
     negative_phrases = [
         "hello", "hi there", "good morning", "excuse me", "okay",
-        "hey siri", "hey google", "alexa", "hey jarvis", "computer",
+        "hey google", "alexa", "hey jarvis", "computer",
     ]
 
     # === POSITIVE SAMPLES ===
